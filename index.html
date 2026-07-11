@@ -885,9 +885,11 @@
     .gb-pts{ flex:0 0 auto; min-width:46px; text-align:right; font-family:var(--font-display);
       font-size:18px; color:var(--green-deep); font-feature-settings:"lnum" 1,"tnum" 1; }
 
+    .duet-board-svg{ -webkit-tap-highlight-color:transparent; }   /* 모바일 탭 시 파란 하이라이트 제거 */
     .duet-board-svg.is-interactive .db-node{ cursor:pointer; }
-    .duet-board-svg.is-interactive .db-hit{ cursor:pointer; }
+    .duet-board-svg.is-interactive .db-hit{ cursor:pointer; outline:none; }   /* 탭 포커스 사각형 제거 */
     .duet-board-svg.is-interactive .db-hit:hover{ stroke:var(--brass); stroke-width:3; }
+    .duet-board-svg.is-interactive .db-hit:focus-visible{ stroke:var(--brass); stroke-width:3; }   /* 키보드 포커스만 표시 */
 
 </style>
 </head>
@@ -4653,7 +4655,20 @@
     return n;
   }
   var boardSvgSeq = 0;
-  var BOARD_WASH_TEX = 'aviary_icon/board-wash.png';   // generated watercolor granulation, tileable
+  var BOARD_WASH_TEX = 'aviary_iconv2/board-wash.png';   // generated watercolor granulation, tileable
+  // iOS/Safari (WebKit) renders large SVG filter+mask groups blurry/artifacted (the mask-with-
+  // feGaussianBlur + big feColorMatrix over the whole board). On WebKit, build the habitat washes
+  // from plain radial gradients (no filters/masks) — crisp everywhere. Other engines keep the
+  // full watercolor stamps. Rasterizing in-browser wouldn't help: Safari's canvas uses the same
+  // filter engine.
+  var USE_LITE_BOARD_BG = (function(){
+    try {
+      var ua = navigator.userAgent || '';
+      var iOS = /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+      var safari = /Safari/.test(ua) && !/Chrome|CriOS|FxiOS|Edg|OPR|Android/.test(ua);
+      return iOS || safari;
+    } catch (e){ return false; }
+  })();
   var HABITATS_ORDER = ['forest', 'grassland', 'wetland'];
   var HAB_GRAD_STOPS = {
     forest:    ['#8aa47f', '#6f8a67', '#566f4f'],
@@ -4690,30 +4705,41 @@
           b = (parseInt(hex.slice(5, 7), 16) / 255).toFixed(3);
       return '0 0 0 0 ' + r + '  0 0 0 0 ' + g + '  0 0 0 0 ' + b + '  0 0 0 1 0';
     }
-    // blur for the soft territory masks (dims the parts of a wash that overflow a neighbour)
-    defs.appendChild(svgEl('filter', { id:uid + '-mblur', x:'-30%', y:'-30%', width:'160%', height:'160%' }, [
-      svgEl('feGaussianBlur', { 'in':'SourceGraphic', stdDeviation:(S * 0.16).toFixed(1) })
-    ]));
-    HABITATS_ORDER.forEach(function(h){
-      // tint the white watercolor stamps to the habitat hue, keeping each pixel's ALPHA
-      // (the pigment density) — so edges stay saturated, interiors stay transparent.
-      defs.appendChild(svgEl('filter', { id:uid + '-tint-' + h, x:'-5%', y:'-5%', width:'110%', height:'110%',
-        'color-interpolation-filters':'sRGB' }, [
-        svgEl('feColorMatrix', { type:'matrix', values:hueMatrix(WASH[h]) })
+    if (!USE_LITE_BOARD_BG){
+      // blur for the soft territory masks (dims the parts of a wash that overflow a neighbour)
+      defs.appendChild(svgEl('filter', { id:uid + '-mblur', x:'-30%', y:'-30%', width:'160%', height:'160%' }, [
+        svgEl('feGaussianBlur', { 'in':'SourceGraphic', stdDeviation:(S * 0.16).toFixed(1) })
       ]));
-      // territory mask: FULL (white) over this region's own cells, DIM (grey) where a
-      // stamp spills into a neighbour's territory — so overflow reads faint, not confusing.
-      var mk = svgEl('mask', { id:uid + '-terr-' + h, maskUnits:'userSpaceOnUse',
-        x:'0', y:'0', width:vbW.toFixed(1), height:vbH.toFixed(1) }, [
-        svgEl('rect', { x:0, y:0, width:vbW.toFixed(1), height:vbH.toFixed(1), fill:'#464646' })
-      ]);
-      var mg = svgEl('g', { filter:'url(#' + uid + '-mblur)' });
-      board.forEach(function(c){ if (c.habitat !== h) return;
-        mg.appendChild(svgEl('circle', { cx:cx(c.row, c.col).toFixed(1), cy:cy(c.row, c.col).toFixed(1), r:(S * 0.6).toFixed(1), fill:'#ffffff' }));
+      HABITATS_ORDER.forEach(function(h){
+        // tint the white watercolor stamps to the habitat hue, keeping each pixel's ALPHA
+        // (the pigment density) — so edges stay saturated, interiors stay transparent.
+        defs.appendChild(svgEl('filter', { id:uid + '-tint-' + h, x:'-5%', y:'-5%', width:'110%', height:'110%',
+          'color-interpolation-filters':'sRGB' }, [
+          svgEl('feColorMatrix', { type:'matrix', values:hueMatrix(WASH[h]) })
+        ]));
+        // territory mask: FULL (white) over this region's own cells, DIM (grey) where a
+        // stamp spills into a neighbour's territory — so overflow reads faint, not confusing.
+        var mk = svgEl('mask', { id:uid + '-terr-' + h, maskUnits:'userSpaceOnUse',
+          x:'0', y:'0', width:vbW.toFixed(1), height:vbH.toFixed(1) }, [
+          svgEl('rect', { x:0, y:0, width:vbW.toFixed(1), height:vbH.toFixed(1), fill:'#464646' })
+        ]);
+        var mg = svgEl('g', { filter:'url(#' + uid + '-mblur)' });
+        board.forEach(function(c){ if (c.habitat !== h) return;
+          mg.appendChild(svgEl('circle', { cx:cx(c.row, c.col).toFixed(1), cy:cy(c.row, c.col).toFixed(1), r:(S * 0.6).toFixed(1), fill:'#ffffff' }));
+        });
+        mk.appendChild(mg);
+        defs.appendChild(mk);
       });
-      mk.appendChild(mg);
-      defs.appendChild(mk);
-    });
+    } else {
+      // WebKit-safe washes: one soft radial gradient per habitat (colour -> transparent), no filters/masks.
+      HABITATS_ORDER.forEach(function(h){
+        defs.appendChild(svgEl('radialGradient', { id:uid + '-lite-' + h, cx:'50%', cy:'50%', r:'50%' }, [
+          svgEl('stop', { offset:'0%',   'stop-color':WASH[h], 'stop-opacity':'0.82' }),
+          svgEl('stop', { offset:'60%',  'stop-color':WASH[h], 'stop-opacity':'0.52' }),
+          svgEl('stop', { offset:'100%', 'stop-color':WASH[h], 'stop-opacity':'0' })
+        ]));
+      });
+    }
     // faint paper grain
     defs.appendChild(svgEl('pattern', { id:uid + '-wash', patternUnits:'userSpaceOnUse', width:'340', height:'340' }, [
       svgEl('image', { href:BOARD_WASH_TEX, x:'0', y:'0', width:'340', height:'340' })
@@ -4730,26 +4756,36 @@
     //   build the wash, feathered rims interleave at the boundaries into a gradient. -----
     var bg = svgEl('g', { class:'db-bg' });
     bg.appendChild(svgEl('rect', { x:0, y:0, width:vbW.toFixed(1), height:vbH.toFixed(1), class:'db-paper-base' }));
-    var STAMPS = ['aviary_icon/wc-stamp0.png', 'aviary_icon/wc-stamp1.png', 'aviary_icon/wc-stamp2.png'];
-    var STAMPS_PER_CELL = 3;
-    HABITATS_ORDER.forEach(function(h){
-      var g = svgEl('g', { filter:'url(#' + uid + '-tint-' + h + ')', mask:'url(#' + uid + '-terr-' + h + ')', opacity:'0.92' });
-      board.forEach(function(c){ if (c.habitat !== h) return;
-        var x = cx(c.row, c.col), y = cy(c.row, c.col);
-        for (var k = 0; k < STAMPS_PER_CELL; k++){
-          // natural, generous stamps; the wider node gaps give the overlap room to
-          // stay legible without cramping.
-          var sz = S * (1.5 + rng() * 0.85);
-          var jx = x + (rng() - 0.5) * S * 0.72, jy = y + (rng() - 0.5) * S * 0.72;
-          var rot = (rng() * 360).toFixed(1);
-          var tex = STAMPS[Math.floor(rng() * STAMPS.length)];
-          g.appendChild(svgEl('image', { href:tex, x:(jx - sz / 2).toFixed(1), y:(jy - sz / 2).toFixed(1),
-            width:sz.toFixed(1), height:sz.toFixed(1), preserveAspectRatio:'none',
-            transform:'rotate(' + rot + ' ' + jx.toFixed(1) + ' ' + jy.toFixed(1) + ')' }));
-        }
+    if (!USE_LITE_BOARD_BG){
+      var STAMPS = ['aviary_iconv2/wc-stamp0.png', 'aviary_iconv2/wc-stamp1.png', 'aviary_iconv2/wc-stamp2.png'];
+      var STAMPS_PER_CELL = 3;
+      HABITATS_ORDER.forEach(function(h){
+        var g = svgEl('g', { filter:'url(#' + uid + '-tint-' + h + ')', mask:'url(#' + uid + '-terr-' + h + ')', opacity:'0.92' });
+        board.forEach(function(c){ if (c.habitat !== h) return;
+          var x = cx(c.row, c.col), y = cy(c.row, c.col);
+          for (var k = 0; k < STAMPS_PER_CELL; k++){
+            // natural, generous stamps; the wider node gaps give the overlap room to
+            // stay legible without cramping.
+            var sz = S * (1.5 + rng() * 0.85);
+            var jx = x + (rng() - 0.5) * S * 0.72, jy = y + (rng() - 0.5) * S * 0.72;
+            var rot = (rng() * 360).toFixed(1);
+            var tex = STAMPS[Math.floor(rng() * STAMPS.length)];
+            g.appendChild(svgEl('image', { href:tex, x:(jx - sz / 2).toFixed(1), y:(jy - sz / 2).toFixed(1),
+              width:sz.toFixed(1), height:sz.toFixed(1), preserveAspectRatio:'none',
+              transform:'rotate(' + rot + ' ' + jx.toFixed(1) + ' ' + jy.toFixed(1) + ')' }));
+          }
+        });
+        bg.appendChild(g);
       });
-      bg.appendChild(g);
-    });
+    } else {
+      // WebKit path: soft overlapping radial washes per cell; they blend naturally at borders.
+      var lg = svgEl('g', { class:'db-lite-wash' });
+      board.forEach(function(c){
+        var x = cx(c.row, c.col), y = cy(c.row, c.col), rr = (S * 0.95).toFixed(1);
+        lg.appendChild(svgEl('circle', { cx:x.toFixed(1), cy:y.toFixed(1), r:rr, fill:'url(#' + uid + '-lite-' + c.habitat + ')' }));
+      });
+      bg.appendChild(lg);
+    }
     bg.appendChild(svgEl('rect', { x:0, y:0, width:vbW.toFixed(1), height:vbH.toFixed(1), fill:'url(#' + uid + '-wash)', class:'db-wash' }));
     svg.appendChild(bg);
 
